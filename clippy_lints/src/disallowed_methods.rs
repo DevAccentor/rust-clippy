@@ -3,6 +3,7 @@ use clippy_utils::{fn_def_id, get_parent_expr, path_def_id};
 
 use rustc_hir::{def::Res, def_id::DefIdMap, Expr, ExprKind};
 use rustc_lint::{LateContext, LateLintPass};
+use rustc_middle::ty::fast_reject::SimplifiedTypeGen;
 use rustc_session::{declare_tool_lint, impl_lint_pass};
 
 use crate::utils::conf;
@@ -75,7 +76,36 @@ impl_lint_pass!(DisallowedMethods => [DISALLOWED_METHODS]);
 
 impl<'tcx> LateLintPass<'tcx> for DisallowedMethods {
     fn check_crate(&mut self, cx: &LateContext<'_>) {
+        let get_res_from_string =
+            |string: &str| clippy_utils::def_path_res(cx, &string.split("::").collect::<Vec<_>>());
+
         for (index, conf) in self.conf_disallowed.iter().enumerate() {
+            // <alloc::vec::Vec as core::iter::IntoIterator>::into_iter
+            if let Some((left, method_name)) = conf.path().split_once('>') {
+                let left = left.trim_start_matches('<');
+                if let Some((type_name, trait_name)) = left.split_once(" as ") {
+                    if let Res::Def(_, ty_id) = get_res_from_string(type_name) {
+                        if let Res::Def(_, trait_id) = get_res_from_string(trait_name) {
+                            for (index, key) in cx.tcx.trait_impls_of(trait_id).non_blanket_impls {
+                                if let SimplifiedTypeGen::AdtSimplifiedType(id)
+                                | SimplifiedTypeGen::ForeignSimplifiedType(id)
+                                | SimplifiedTypeGen::TraitSimplifiedType(id)
+                                | SimplifiedTypeGen::ClosureSimplifiedType(id)
+                                | SimplifiedTypeGen::GeneratorSimplifiedType(id)
+                                | SimplifiedTypeGen::OpaqueSimplifiedType(id) = index
+                                {
+                                    //is_trait
+                                    //impl_item_implementor_ids
+                                    // trait_may_define_assoc_type
+                                    // trait_id_of_impl
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             let segs: Vec<_> = conf.path().split("::").collect();
             if let Res::Def(_, id) = clippy_utils::def_path_res(cx, &segs) {
                 self.disallowed.insert(id, index);
